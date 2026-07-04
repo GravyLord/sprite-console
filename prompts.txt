@@ -1,0 +1,12 @@
+# Goatface Sprite Console — prompt library
+# One prompt per line. Blank lines and #-comments are ignored.
+# Starter set: top-down oblique sci-fi salvage props for Signal Lost.
+
+rusted hull plate with exposed rivets, sci-fi salvage prop, top-down oblique view
+derelict escape pod, cracked canopy, scorched paneling, top-down oblique view
+tangled bundle of severed power cables sparking, salvage debris, top-down oblique view
+dented cargo crate spilling scrap circuitry, sci-fi salvage, top-down oblique view
+broken satellite dish half-buried in ash, weathered metal, top-down oblique view
+abandoned mining drill head, corroded and leaking coolant, top-down oblique view
+shattered reactor core casing, faint amber glow, sci-fi wreckage, top-down oblique view
+collapsed antenna mast with torn cabling, salvage prop, top-down oblique view

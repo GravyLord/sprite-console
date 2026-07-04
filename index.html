@@ -20,7 +20,8 @@
 
   /* ---- header ---- */
   header{display:flex;align-items:center;gap:12px;padding:14px 20px;flex-wrap:wrap;
-         border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+         border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5;
+         max-width:1280px;margin:0 auto;width:100%}
   header h1{font-family:'Silkscreen',var(--mono);font-size:15px;letter-spacing:1px;color:var(--amber)}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--warn);flex:none;
        animation:pulse 1.4s ease-in-out infinite}
@@ -33,7 +34,8 @@
         border-radius:20px;padding:4px 11px;white-space:nowrap}
   #chip .b{color:var(--amber)}
 
-  main{display:grid;grid-template-columns:320px 1fr;gap:0;min-height:calc(100vh - 57px)}
+  main{display:grid;grid-template-columns:320px 1fr;gap:0;min-height:calc(100vh - 57px);
+       max-width:1280px;margin:0 auto}
   @media(max-width:760px){main{grid-template-columns:1fr}}
 
   /* ---- control panel ---- */
@@ -68,9 +70,10 @@
   .hint{font-size:12px;color:var(--dim)}
 
   /* ---- results ---- */
-  .results{padding:20px}
+  .results{padding:20px;margin:16px;border-radius:10px;background:var(--panel);
+           border:1px solid var(--line);box-shadow:inset 0 0 28px rgba(0,0,0,.28)}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;overflow:hidden;
         animation:rise .28s ease both}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   .card .art{
@@ -83,10 +86,22 @@
   .card a{color:var(--amber);text-decoration:none}
   .card a:hover{color:var(--amber-hot)}
   .empty{color:var(--dim);padding:60px 20px;text-align:center;line-height:1.7}
+  .empty svg{display:block;width:120px;height:120px;margin:0 auto 18px}
+
+  /* shimmering placeholder cards shown while a batch generates */
+  .skel{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+        overflow:hidden;position:relative}
+  .skel .art{height:180px;background:repeating-conic-gradient(#262d36 0 25%,#1c222a 0 50%) 0 0/16px 16px}
+  .skel .bar{height:31px;border-top:1px solid var(--line)}
+  .skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+    background:linear-gradient(100deg,transparent 35%,rgba(255,180,84,.12) 50%,transparent 65%);
+    animation:shimmer 1.25s ease-in-out infinite}
+  @keyframes shimmer{to{transform:translateX(100%)}}
 
   @media (prefers-reduced-motion:reduce){
     .dot{animation:none}
     .card{animation:none}
+    .skel::after{animation:none}
     #go{transition:none}
   }
 </style>
@@ -102,6 +117,13 @@
 
 <main>
   <section class="panel" aria-label="Generation controls">
+    <div>
+      <label for="library">Library</label>
+      <select id="library">
+        <option value="">Choose a starter prompt…</option>
+      </select>
+    </div>
+
     <div>
       <label for="prompt">Prompt</label>
       <textarea id="prompt" placeholder="rusted hull plate, sci-fi salvage prop, top-down view, oblique perspective"></textarea>
@@ -153,7 +175,34 @@
 
   <section class="results" aria-label="Results">
     <div class="grid" id="grid"></div>
-    <p class="empty" id="empty">No sprites yet.<br>Write a prompt and press generate.</p>
+    <div class="empty" id="empty">
+      <svg viewBox="0 0 16 16" role="img" aria-label="Crashed spaceship silhouette" shape-rendering="crispEdges">
+        <!-- hull, nose down to the left -->
+        <g fill="#7c8794">
+          <rect x="9" y="3" width="3" height="1"/>
+          <rect x="7" y="4" width="6" height="1"/>
+          <rect x="5" y="5" width="8" height="1"/>
+          <rect x="4" y="6" width="8" height="1"/>
+          <rect x="3" y="7" width="7" height="1"/>
+          <rect x="3" y="8" width="5" height="1"/>
+          <rect x="12" y="2" width="1" height="2"/>
+        </g>
+        <!-- cockpit + spark glow -->
+        <g fill="#ffb454">
+          <rect x="9" y="5" width="2" height="1"/>
+          <rect x="10" y="4" width="1" height="1"/>
+          <rect x="2" y="9" width="1" height="1"/>
+          <rect x="13" y="6" width="1" height="1"/>
+        </g>
+        <!-- broken ground line -->
+        <g fill="#7c8794" opacity=".5">
+          <rect x="1" y="11" width="3" height="1"/>
+          <rect x="6" y="11" width="3" height="1"/>
+          <rect x="11" y="11" width="3" height="1"/>
+        </g>
+      </svg>
+      <p>No sprites yet.<br>Write a prompt and press generate.</p>
+    </div>
   </section>
 </main>
 
@@ -161,7 +210,7 @@
 const $ = id => document.getElementById(id);
 let grid = 96;
 
-// segmented control for grid size
+// ---- segmented control for grid size ----
 $('gridSeg').addEventListener('click', e => {
   const btn = e.target.closest('button');
   if (!btn) return;
@@ -173,11 +222,102 @@ $('gridSeg').addEventListener('click', e => {
   });
 });
 
-// live slider readouts
+// ---- live slider readouts ----
 $('colors').oninput = () => $('colorsVal').textContent = $('colors').value;
 $('count').oninput  = () => $('countVal').textContent  = $('count').value;
 
-// swap compute backend — POSTs /backend, then the poller shows the warm-up
+// ---- prompt library: fill the textarea from a saved prompt ----
+$('library').onchange = () => {
+  const v = $('library').value;
+  if (!v) return;
+  $('prompt').value = v;
+  $('prompt').focus();
+};
+async function loadLibrary() {
+  try {
+    const { prompts } = await (await fetch('/prompts')).json();
+    for (const p of prompts) {
+      const o = document.createElement('option');
+      o.value = p;
+      // trim long prompts to a readable label; the full text still lands in the box
+      o.textContent = p.length > 48 ? p.slice(0, 47) + '…' : p;
+      $('library').appendChild(o);
+    }
+  } catch { /* library is optional — ignore if it can't load */ }
+}
+
+// ---- render one finished sprite card (prepend = newest on top) ----
+function addCard(img, prompt, atEnd) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const alt = `pixel art sprite${prompt ? ' for prompt: ' + prompt : ''}`;
+  card.innerHTML =
+    `<div class="art"><img src="${img.file}" alt="${alt.replace(/"/g,'&quot;')}"></div>` +
+    `<div class="meta"><span>seed ${img.seed ?? '—'}</span>` +
+    `<a href="${img.file}" download>save</a></div>`;
+  $('empty').style.display = 'none';
+  if (atEnd) $('grid').appendChild(card); else $('grid').prepend(card);
+}
+
+// ---- restore this session's earlier sprites after a refresh ----
+async function loadGallery() {
+  try {
+    const items = await (await fetch('/gallery')).json();
+    // server sends newest first; append in order so newest ends up top-left
+    for (const img of items) addCard(img, '', true);
+  } catch { /* fine if outputs/ is empty */ }
+}
+
+// ---- header chip: "CUDA · RTX 3090 · 24GB", or an error state ----
+function setChip(h){
+  const chip = $('chip');
+  chip.style.color = '';
+  // no accelerator and the model gave up -> call it out in the error color
+  if (h.status === 'error' && h.backend === 'CPU') {
+    chip.textContent = 'no GPU backend';
+    chip.style.color = 'var(--err)';
+    chip.hidden = false;
+    return;
+  }
+  if (!h.backend) { chip.hidden = true; return; }
+  const bits = [`<span class="b">${h.backend}</span>`];
+  if (h.device_name && h.device_name !== h.backend) bits.push(h.device_name);
+  if (h.vram_gb) bits.push(`${h.vram_gb}GB`);
+  chip.innerHTML = bits.join(' · ');
+  chip.hidden = false;
+}
+
+// ---- poll backend until the model is warm ----
+async function poll() {
+  try {
+    const h = await (await fetch('/health')).json();
+    setChip(h);
+    if (h.status === 'ready') {
+      $('dot').className = 'dot ready';
+      $('statusText').textContent = 'Model ready';
+      $('go').disabled = false;
+      return;
+    }
+    if (h.status === 'error') {
+      // GENERATE stays off; the status line says why
+      $('dot').className = 'dot error';
+      $('go').disabled = true;
+      $('statusText').textContent = 'Backend error — ' + (h.error || 'the model could not load') +
+        '. Check the terminal running app.py, then reload this page.';
+      return;
+    }
+    $('dot').className = 'dot';
+    $('go').disabled = true;
+    $('statusText').textContent = 'Waiting for model — first load downloads ~7 GB, so give it a few minutes.';
+  } catch {
+    $('dot').className = 'dot';
+    $('go').disabled = true;
+    $('statusText').textContent = 'Waiting for model — connecting to the server…';
+  }
+  setTimeout(poll, 3000);
+}
+
+// ---- swap compute backend — POSTs /backend, then the poller shows warm-up ----
 $('backend').onchange = async () => {
   const device = $('backend').value;
   $('go').disabled = true;
@@ -194,53 +334,32 @@ $('backend').onchange = async () => {
   }
 };
 
-// reflect hardware in the header chip, e.g. "CUDA · RTX 3090 · 24GB"
-function setChip(h){
-  if (!h.backend) { $('chip').hidden = true; return; }
-  const bits = [`<span class="b">${h.backend}</span>`];
-  if (h.device_name && h.device_name !== h.backend) bits.push(h.device_name);
-  if (h.vram_gb) bits.push(`${h.vram_gb}GB`);
-  $('chip').innerHTML = bits.join(' · ');
-  $('chip').hidden = false;
-}
-
-// poll backend until the model is warm
-async function poll() {
-  try {
-    const h = await (await fetch('/health')).json();
-    setChip(h);
-    if (h.status === 'ready') {
-      $('dot').className = 'dot ready';
-      $('statusText').textContent = 'Model ready';
-      $('go').disabled = false;
-      return;
-    }
-    if (h.status === 'error') {
-      $('dot').className = 'dot error';
-      $('go').disabled = true;
-      $('statusText').textContent = 'Model failed to load — ' + (h.error || 'unknown error') +
-        '. Check the terminal running app.py, then reload this page.';
-      return;
-    }
-    $('dot').className = 'dot';
-    $('go').disabled = true;
-    $('statusText').textContent = 'Warming up the model — first load downloads ~7 GB, so give it a few minutes.';
-  } catch {
-    $('dot').className = 'dot';
-    $('statusText').textContent = 'Connecting to the server…';
-  }
-  setTimeout(poll, 3000);
-}
-poll();
-
-$('go').onclick = async () => {
+// ---- generate ----
+async function generate() {
+  if ($('go').disabled) return;
   const prompt = $('prompt').value.trim();
   if (!prompt) { $('prompt').focus(); $('statusText').textContent = 'Add a prompt first, then generate.'; return; }
 
+  const n = +$('count').value;
   $('go').disabled = true;
   $('go').textContent = 'GENERATING…';
-  const n = +$('count').value;
-  $('statusText').textContent = `Generating ${n} sprite${n > 1 ? 's' : ''}…`;
+
+  // one shimmering placeholder per requested variation
+  $('empty').style.display = 'none';
+  const skels = [];
+  for (let i = 0; i < n; i++) {
+    const s = document.createElement('div');
+    s.className = 'skel';
+    s.innerHTML = '<div class="art"></div><div class="bar"></div>';
+    $('grid').prepend(s);
+    skels.push(s);
+  }
+
+  // tick elapsed seconds in the status line
+  let secs = 0;
+  const label = `Generating ${n} sprite${n > 1 ? 's' : ''}`;
+  $('statusText').textContent = `${label}… (0s)`;
+  const ticker = setInterval(() => { $('statusText').textContent = `${label}… (${++secs}s)`; }, 1000);
 
   try {
     const body = {
@@ -258,24 +377,31 @@ $('go').onclick = async () => {
     if (!r.ok || data.error) throw new Error(data.error || `server returned ${r.status}`);
 
     // /generate returns a bare array: [{file, seed}, ...]
-    $('empty').style.display = 'none';
-    for (const img of data) {
-      const card = document.createElement('div');
-      card.className = 'card';
-      const alt = `pixel art sprite for prompt: ${prompt}`;
-      card.innerHTML =
-        `<div class="art"><img src="${img.file}" alt="${alt.replace(/"/g,'&quot;')}"></div>` +
-        `<div class="meta"><span>seed ${img.seed}</span>` +
-        `<a href="${img.file}" download>save</a></div>`;
-      $('grid').prepend(card);
-    }
-    $('statusText').textContent = 'Model ready';
+    skels.forEach(s => s.remove());
+    for (const img of data) addCard(img, prompt, false);
+    $('statusText').textContent = `Model ready — generated ${data.length} sprite${data.length > 1 ? 's' : ''} in ${secs}s`;
   } catch (err) {
+    skels.forEach(s => s.remove());
+    if (!$('grid').children.length) $('empty').style.display = '';
     $('statusText').textContent = 'Generation failed — ' + err.message + '. Try again in a moment.';
+  } finally {
+    clearInterval(ticker);
+    $('go').disabled = false;
+    $('go').textContent = 'GENERATE';
   }
-  $('go').disabled = false;
-  $('go').textContent = 'GENERATE';
-};
+}
+
+$('go').onclick = generate;
+
+// Ctrl+Enter (or Cmd+Enter) inside the prompt box fires generate
+$('prompt').addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); generate(); }
+});
+
+// ---- boot ----
+loadLibrary();
+loadGallery();
+poll();
 </script>
 </body>
 </html>

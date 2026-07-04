@@ -246,6 +246,39 @@ def generate(req: GenRequest):
     return results
 
 
+@app.get("/prompts")
+def prompts():
+    """Return the prompt library from an optional prompts.txt in the project
+    root. One prompt per line; blank lines and #-comments are skipped. Missing
+    file just means an empty library — not an error."""
+    path = Path("prompts.txt")
+    lines = []
+    if path.exists():
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#"):
+                lines.append(line)
+    return {"prompts": lines}
+
+
+@app.get("/gallery")
+def gallery():
+    """List sprites already sitting in outputs/, newest first (max 60), so a
+    page refresh doesn't lose the session's work. Seed is parsed back out of
+    the timestamp_seed.png filename."""
+    files = sorted(OUT_DIR.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    results = []
+    for p in files[:60]:
+        # Filenames look like "1720000000_12345.png" — the seed is the last
+        # underscore-separated chunk of the stem.
+        try:
+            seed = int(p.stem.rsplit("_", 1)[-1])
+        except ValueError:
+            seed = None
+        results.append({"file": f"/outputs/{p.name}", "seed": seed})
+    return results
+
+
 @app.get("/")
 def index():
     return FileResponse("index.html")
