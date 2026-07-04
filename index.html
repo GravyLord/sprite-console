@@ -49,10 +49,18 @@
   textarea:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{
     outline:2px solid var(--amber);outline-offset:1px}
 
-  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-  .seg button{flex:1;background:var(--panel);border:0;color:var(--dim);padding:8px 0;font:inherit;cursor:pointer}
-  .seg button+button{border-left:1px solid var(--line)}
+  /* 1px gaps over a --line background draw the dividers, so the control wraps
+     to a second row cleanly as options grow */
+  .seg{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+       border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .seg button{background:var(--panel);border:0;color:var(--dim);padding:8px 0;font:inherit;cursor:pointer}
+  .seg button.wide{grid-column:span 2}
   .seg button.on{background:var(--panel-2);color:var(--amber)}
+
+  .check{display:flex;align-items:center;gap:9px;margin:0;
+         text-transform:none;letter-spacing:0;color:var(--ink)}
+  .check input{width:16px;height:16px;accent-color:var(--amber);cursor:pointer}
+  .check .soft{color:var(--dim)}
 
   .row{display:flex;align-items:center;gap:10px}
   input[type=range]{flex:1;accent-color:var(--amber)}
@@ -136,7 +144,11 @@
         <button type="button" data-v="64">64</button>
         <button type="button" data-v="96" class="on" aria-pressed="true">96</button>
         <button type="button" data-v="128">128</button>
+        <button type="button" data-v="192">192</button>
+        <button type="button" data-v="256">256</button>
+        <button type="button" data-v="native" class="wide">native</button>
       </div>
+      <p class="hint" style="margin-top:6px">Native skips the downscale — full 1024px, palette still applies. For hero assets and mockups.</p>
     </div>
 
     <div>
@@ -158,6 +170,13 @@
     <div>
       <label for="seed">Seed <span class="soft">(blank = random)</span></label>
       <input type="number" id="seed" placeholder="random" min="0">
+    </div>
+
+    <div>
+      <label class="check" for="vibrance">
+        <input type="checkbox" id="vibrance">
+        Vibrance <span class="soft">— richer, more saturated colors</span>
+      </label>
     </div>
 
     <div>
@@ -214,7 +233,8 @@ let grid = 96;
 $('gridSeg').addEventListener('click', e => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  grid = +btn.dataset.v;
+  // "native" stays a string; every other option is a numeric grid size
+  grid = btn.dataset.v === 'native' ? 'native' : +btn.dataset.v;
   [...$('gridSeg').children].forEach(b => {
     const on = b === btn;
     b.classList.toggle('on', on);
@@ -366,7 +386,8 @@ async function generate() {
       prompt, grid,
       colors: +$('colors').value,
       count:  n,
-      seed:   $('seed').value ? +$('seed').value : null
+      seed:   $('seed').value ? +$('seed').value : null,
+      vibrance: $('vibrance').checked
     };
     const r = await fetch('/generate', {
       method: 'POST',

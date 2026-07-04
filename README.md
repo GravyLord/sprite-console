@@ -102,8 +102,13 @@ read `ROCm · Radeon RX 9060 XT · …`.
 
 ## Knobs worth knowing
 
-- **Sprite grid** (32/64/96/128): final true resolution. Prop/environment
-  sprites usually live around 64–96.
+- **Sprite grid** (32/64/96/128/192/256): final true resolution. Prop/environment
+  sprites usually live around 64–96. **Native** skips the downscale entirely and
+  quantizes the full 1024px render — palette still applies — for hero assets and
+  mockups.
+- **Vibrance**: when on, steers the model toward a richer, more saturated palette
+  (adds saturation keywords to the prompt and pushes "muted, desaturated" onto the
+  negative prompt).
 - **Palette colors**: quantization limit. Lower = punchier, more "authored"
   look; 16–32 is the sweet spot.
 - **Variations**: how many sprites per generate (1–8). One generation runs at a

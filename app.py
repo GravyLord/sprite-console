@@ -35,6 +35,10 @@ LORA_ID = "nerijs/pixel-art-xl"      # pixel-art fine-tune, trigger word: "pixel
 TRIGGER = "pixel art"                # prepended to every prompt
 NEGATIVE = "blurry, photo, realistic, 3d render, jpeg artifacts, watermark, text"
 
+# Valid downscale targets. "native" (handled separately) skips the downscale
+# entirely and quantizes the full 1024px render — for hero assets and mockups.
+GRID_SIZES = (32, 64, 96, 128, 192, 256)
+
 OUT_DIR = Path("outputs")
 OUT_DIR.mkdir(exist_ok=True)
 
@@ -156,23 +160,27 @@ def startup():
 
 # ---------------------------------------------------------------- pixel post
 
-def pixelate(img: Image.Image, grid: int, colors: int) -> Image.Image:
+def pixelate(img: Image.Image, grid, colors: int) -> Image.Image:
     """Turn raw 1024x1024 diffusion output into honest pixel art:
     shrink to the target grid (this *is* the pixelation), then
-    quantize to a limited palette like a real sprite sheet."""
-    small = img.resize((grid, grid), Image.NEAREST)
-    small = small.quantize(colors=colors, method=Image.MEDIANCUT).convert("RGB")
-    return small
+    quantize to a limited palette like a real sprite sheet.
+
+    grid is either an int size or the string "native". "native" keeps the full
+    1024px render and only quantizes the palette — no downscale."""
+    if grid != "native":
+        img = img.resize((grid, grid), Image.NEAREST)
+    return img.quantize(colors=colors, method=Image.MEDIANCUT).convert("RGB")
 
 
 # ---------------------------------------------------------------- api
 
 class GenRequest(BaseModel):
     prompt: str
-    grid: int = 96          # 32 / 64 / 96 / 128 — final sprite resolution
+    grid: int | str = 96    # 32/64/96/128/192/256, or "native" (no downscale)
     colors: int = 24        # palette size after quantization
     count: int = 4          # how many variations
     seed: int | None = None # set for reproducible results
+    vibrance: bool = False  # richer, more saturated palette when True
 
 
 class BackendRequest(BaseModel):
@@ -209,8 +217,26 @@ def generate(req: GenRequest):
 
     # Clamp everything so a bad request can't ask for a 900-color, 50-image job.
     req.count = max(1, min(req.count, 8))
-    req.grid = req.grid if req.grid in (32, 64, 96, 128) else 96
     req.colors = max(4, min(req.colors, 64))
+
+    # Resolve the grid: "native" skips the downscale, otherwise it must be one
+    # of the known sizes (anything else falls back to the 96 default).
+    if req.grid == "native":
+        grid = "native"
+    else:
+        try:
+            gsize = int(req.grid)
+        except (TypeError, ValueError):
+            gsize = 96
+        grid = gsize if gsize in GRID_SIZES else 96
+
+    # Vibrance nudges the model toward a richer palette: extra keywords on the
+    # positive side, and "muted, desaturated" pushed onto the negative side.
+    prompt = f"{TRIGGER}, {req.prompt}"
+    negative = NEGATIVE
+    if req.vibrance:
+        prompt += ", vibrant colors, rich saturated palette, detailed shading"
+        negative += ", muted, desaturated"
 
     device = state["device"]
     results = []
@@ -223,21 +249,21 @@ def generate(req: GenRequest):
             g = torch.Generator(device=device).manual_seed(seed)
 
             image = pipe(
-                prompt=f"{TRIGGER}, {req.prompt}",
-                negative_prompt=NEGATIVE,
+                prompt=prompt,
+                negative_prompt=negative,
                 num_inference_steps=28,
                 guidance_scale=7.0,
                 width=1024, height=1024,
                 generator=g,
             ).images[0]
 
-            sprite = pixelate(image, req.grid, req.colors)
+            sprite = pixelate(image, grid, req.colors)
 
             name = f"{int(time.time())}_{seed}.png"
             path = OUT_DIR / name
             # Stash the prompt + seed inside the PNG so files stay self-describing.
             meta = PngInfo()
-            meta.add_text("prompt", f"{TRIGGER}, {req.prompt}")
+            meta.add_text("prompt", prompt)
             meta.add_text("seed", str(seed))
             sprite.save(path, pnginfo=meta)
 
