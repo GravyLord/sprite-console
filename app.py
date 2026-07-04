@@ -3,7 +3,7 @@ Goatface Sprite Console — backend
 =================================
 One file. It does four jobs:
   1. Detects the GPU backend (ROCm / CUDA / MPS / CPU) at startup.
-  2. Loads a pixel-art image model (SDXL + pixel-art LoRA) in the background.
+  2. Loads a selectable pixel-art engine (SDXL+LCM, or FLUX schnell) in the background.
   3. Exposes POST /generate — takes a prompt, returns finished sprite PNGs.
   4. Serves index.html (the GUI) at /.
 
@@ -30,10 +30,26 @@ from PIL.PngImagePlugin import PngInfo
 
 # ---------------------------------------------------------------- settings
 
-MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
-LORA_ID = "nerijs/pixel-art-xl"      # pixel-art fine-tune, trigger word: "pixel"
 TRIGGER = "pixel art"                # prepended to every prompt
 NEGATIVE = "blurry, photo, realistic, 3d render, jpeg artifacts, watermark, text"
+
+# --- engine A: Pixel XL — SDXL + LCM LoRA + pixel-art LoRA (fast, few steps) ---
+SDXL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
+LCM_LORA_ID = "latent-consistency/lcm-lora-sdxl"   # few-step sampling LoRA
+PIXEL_LORA_ID = "nerijs/pixel-art-xl"              # pixel-art fine-tune
+
+# --- engine B: Flux Pixel — FLUX.1-schnell + a modern pixel-art LoRA (quality) ---
+FLUX_ID = "black-forest-labs/FLUX.1-schnell"
+FLUX_LORA_ID = "UmeAiRT/FLUX.1-dev-LoRA-Modern_Pixel_art"
+
+# Selectable engines. Each carries the few-step sampler settings from its model
+# card. "flux" is guidance-distilled, so it skips the negative prompt and runs
+# at guidance 0. The generate handler reads steps/guidance/flux from here.
+ENGINES = {
+    "pixel_xl": {"label": "Pixel XL (fast)",    "steps": 8, "guidance": 1.5, "flux": False},
+    "flux":     {"label": "Flux Pixel (quality)", "steps": 4, "guidance": 0.0, "flux": True},
+}
+DEFAULT_ENGINE = "pixel_xl"
 
 # Valid downscale targets. "native" (handled separately) skips the downscale
 # entirely and quantizes the full 1024px render — for hero assets and mockups.
@@ -52,6 +68,10 @@ state = {
     "status": "loading",
     "error": None,
     "pipe": None,
+    # Which engine is active, and what device preference to (re)load it on.
+    "engine": DEFAULT_ENGINE,
+    "engine_label": ENGINES[DEFAULT_ENGINE]["label"],
+    "device_pref": "auto",    # "auto" | "cuda" | "cpu" — remembered across reloads
     # Hardware facts, filled in by detect_backend() and shown in the header.
     "backend": "CPU",         # "ROCm" | "CUDA" | "MPS" | "CPU"
     "device": "cpu",          # torch device string
@@ -110,44 +130,100 @@ def detect_backend(prefer="auto"):
 
 # ---------------------------------------------------------------- model load
 # The model loads in a background thread so the GUI comes up instantly and can
-# show "warming up" instead of hanging. First run downloads ~7 GB of weights.
+# show "warming up" instead of hanging. Only one engine is held in memory at a
+# time; switching engines drops the old pipeline and frees its VRAM first.
 
-def load_model(prefer="auto"):
-    # Flip back to loading so a /backend swap shows the warming state in the UI.
-    state["status"] = "loading"
-    state["error"] = None
+def _unload_pipe():
+    """Drop the current pipeline reference and hand its VRAM back to the driver
+    so a different engine has room to load."""
     state["pipe"] = None
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def build_pixel_xl(device, dtype, on_gpu):
+    """Pixel XL: SDXL with the LCM LoRA (for few-step sampling) stacked on the
+    pixel-art LoRA, weighted and run through the LCM scheduler — straight off
+    the nerijs/pixel-art-xl model card."""
+    from diffusers import StableDiffusionXLPipeline, LCMScheduler
+
+    if on_gpu:
+        pipe = StableDiffusionXLPipeline.from_pretrained(
+            SDXL_ID, torch_dtype=dtype, variant="fp16", use_safetensors=True,
+        )
+    else:
+        # No fp16 variant on CPU — load the full-precision weights.
+        pipe = StableDiffusionXLPipeline.from_pretrained(
+            SDXL_ID, torch_dtype=dtype, use_safetensors=True,
+        )
+
+    pipe.load_lora_weights(LCM_LORA_ID, adapter_name="lcm")
+    pipe.load_lora_weights(PIXEL_LORA_ID, adapter_name="pixel")
+    pipe.set_adapters(["lcm", "pixel"], adapter_weights=[1.0, 1.2])
+    pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+
+    pipe.to(device)
+    if on_gpu:
+        pipe.enable_vae_tiling()   # cheap VRAM saver, GPU-only
+    return pipe
+
+
+def build_flux(device, dtype, on_gpu):
+    """Flux Pixel: FLUX.1-schnell (a distilled, guidance-free model) with a
+    modern pixel-art LoRA. That LoRA targets FLUX.1-dev, so it may not load onto
+    schnell — if it doesn't, we raise a clear error that /health can show rather
+    than letting the loader thread die silently."""
+    from diffusers import FluxPipeline
+
+    pipe = FluxPipeline.from_pretrained(FLUX_ID, torch_dtype=dtype)
 
     try:
-        detect_backend(prefer)
+        pipe.load_lora_weights(FLUX_LORA_ID)
+    except Exception as e:
+        raise RuntimeError(
+            f"Flux pixel-art LoRA failed to load on FLUX.1-schnell: {e}. "
+            "This LoRA is trained for FLUX.1-dev and may be incompatible with "
+            "the distilled schnell checkpoint — try Pixel XL instead."
+        )
+
+    pipe.to(device)
+    if on_gpu:
+        pipe.enable_vae_tiling()
+    return pipe
+
+
+def reload_pipeline():
+    """(Re)build the active engine on the preferred device, in place. Reads the
+    engine + device preference from state, so /engine and /backend just update
+    those and call this on a background thread."""
+    state["status"] = "loading"
+    state["error"] = None
+    _unload_pipe()   # free the old engine's VRAM before loading the new one
+
+    try:
+        detect_backend(state["device_pref"])
         device = state["device"]
         on_gpu = device in ("cuda", "mps")
-        # fp16 weights on GPU keep VRAM down; CPU needs fp32 for correctness.
-        dtype = torch.float16 if on_gpu else torch.float32
 
-        from diffusers import StableDiffusionXLPipeline
+        engine = state["engine"]
+        state["engine_label"] = ENGINES[engine]["label"]
 
-        if on_gpu:
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                MODEL_ID, torch_dtype=dtype, variant="fp16", use_safetensors=True,
-            )
+        if ENGINES[engine]["flux"]:
+            # Flux prefers bfloat16 on GPU; fp16 misbehaves on it.
+            dtype = torch.bfloat16 if on_gpu else torch.float32
+            pipe = build_flux(device, dtype, on_gpu)
         else:
-            # No fp16 variant on CPU — load the full-precision weights.
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                MODEL_ID, torch_dtype=dtype, use_safetensors=True,
-            )
-
-        pipe.load_lora_weights(LORA_ID)
-        pipe.to(device)
-
-        # Small VRAM saver, costs almost nothing in speed. GPU-only — it's a
-        # memory trick and CPU isn't memory-bound the same way.
-        if on_gpu:
-            pipe.enable_vae_tiling()
+            # fp16 weights on GPU keep VRAM down; CPU needs fp32 for correctness.
+            dtype = torch.float16 if on_gpu else torch.float32
+            pipe = build_pixel_xl(device, dtype, on_gpu)
 
         state["pipe"] = pipe
         state["status"] = "ready"
-    except Exception as e:  # surface load failures to the GUI
+    except Exception as e:  # surface load failures to the GUI via /health
+        _unload_pipe()
         state["status"] = "error"
         state["error"] = str(e)
 
@@ -155,7 +231,7 @@ def load_model(prefer="auto"):
 @app.on_event("startup")
 def startup():
     """Kick off the first load in the background so the GUI is instant."""
-    threading.Thread(target=load_model, args=("auto",), daemon=True).start()
+    threading.Thread(target=reload_pipeline, daemon=True).start()
 
 
 # ---------------------------------------------------------------- pixel post
@@ -187,6 +263,10 @@ class BackendRequest(BaseModel):
     device: str = "auto"    # "auto" | "cuda" | "cpu"
 
 
+class EngineRequest(BaseModel):
+    engine: str = DEFAULT_ENGINE   # "pixel_xl" | "flux"
+
+
 @app.get("/health")
 def health():
     return {
@@ -195,19 +275,35 @@ def health():
         "backend": state["backend"],
         "device_name": state["device_name"],
         "vram_gb": state["vram_gb"],
+        "engine": state["engine"],
+        "engine_label": state["engine_label"],
     }
 
 
 @app.post("/backend")
 def set_backend(req: BackendRequest):
-    """Reload the pipeline on a different device.
+    """Reload the active engine on a different device.
 
     Returns immediately; the swap happens on a background thread and the status
     goes back to "loading" while it warms up.
     """
     device = req.device if req.device in ("auto", "cuda", "cpu") else "auto"
-    threading.Thread(target=load_model, args=(device,), daemon=True).start()
+    state["device_pref"] = device
+    threading.Thread(target=reload_pipeline, daemon=True).start()
     return {"status": "loading", "device": device}
+
+
+@app.post("/engine")
+def set_engine(req: EngineRequest):
+    """Switch engines. Unloads the current pipeline (freeing VRAM) and loads the
+    requested one in the background; status goes back to "loading" during the
+    swap.
+    """
+    engine = req.engine if req.engine in ENGINES else DEFAULT_ENGINE
+    state["engine"] = engine
+    state["engine_label"] = ENGINES[engine]["label"]
+    threading.Thread(target=reload_pipeline, daemon=True).start()
+    return {"status": "loading", "engine": engine, "engine_label": ENGINES[engine]["label"]}
 
 
 @app.post("/generate")
@@ -238,6 +334,11 @@ def generate(req: GenRequest):
         prompt += ", vibrant colors, rich saturated palette, detailed shading"
         negative += ", muted, desaturated"
 
+    # Sampler settings come from the active engine. Flux is guidance-distilled
+    # and takes no negative prompt, so we branch on it below.
+    cfg = ENGINES[state["engine"]]
+    steps, guidance, is_flux = cfg["steps"], cfg["guidance"], cfg["flux"]
+
     device = state["device"]
     results = []
     with gen_lock:
@@ -248,14 +349,17 @@ def generate(req: GenRequest):
             seed = (req.seed + i) if req.seed is not None else torch.seed() % (2**31)
             g = torch.Generator(device=device).manual_seed(seed)
 
-            image = pipe(
+            kwargs = dict(
                 prompt=prompt,
-                negative_prompt=negative,
-                num_inference_steps=28,
-                guidance_scale=7.0,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
                 width=1024, height=1024,
                 generator=g,
-            ).images[0]
+            )
+            if not is_flux:
+                kwargs["negative_prompt"] = negative  # Flux has no negative prompt
+
+            image = pipe(**kwargs).images[0]
 
             sprite = pixelate(image, grid, req.colors)
 

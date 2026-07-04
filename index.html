@@ -126,6 +126,14 @@
 <main>
   <section class="panel" aria-label="Generation controls">
     <div>
+      <label for="engine">Engine</label>
+      <select id="engine">
+        <option value="pixel_xl">Pixel XL (fast)</option>
+        <option value="flux">Flux Pixel (quality)</option>
+      </select>
+    </div>
+
+    <div>
       <label for="library">Library</label>
       <select id="library">
         <option value="">Choose a starter prompt…</option>
@@ -303,6 +311,7 @@ function setChip(h){
   const bits = [`<span class="b">${h.backend}</span>`];
   if (h.device_name && h.device_name !== h.backend) bits.push(h.device_name);
   if (h.vram_gb) bits.push(`${h.vram_gb}GB`);
+  if (h.engine_label) bits.push(h.engine_label);   // active engine
   chip.innerHTML = bits.join(' · ');
   chip.hidden = false;
 }
@@ -312,6 +321,7 @@ async function poll() {
   try {
     const h = await (await fetch('/health')).json();
     setChip(h);
+    if (h.engine) $('engine').value = h.engine;   // keep the dropdown truthful after a refresh
     if (h.status === 'ready') {
       $('dot').className = 'dot ready';
       $('statusText').textContent = 'Model ready';
@@ -336,6 +346,23 @@ async function poll() {
   }
   setTimeout(poll, 3000);
 }
+
+// ---- swap engine — POSTs /engine, unloads the old model, loads the new ----
+$('engine').onchange = async () => {
+  const engine = $('engine').value;
+  $('go').disabled = true;
+  $('statusText').textContent = 'Switching engine — freeing VRAM and reloading the model…';
+  try {
+    await fetch('/engine', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({engine})
+    });
+    poll();  // resume polling; status is back to loading on the server
+  } catch {
+    $('statusText').textContent = 'Could not reach the server. Is app.py still running?';
+  }
+};
 
 // ---- swap compute backend — POSTs /backend, then the poller shows warm-up ----
 $('backend').onchange = async () => {

@@ -102,6 +102,13 @@ read `ROCm · Radeon RX 9060 XT · …`.
 
 ## Knobs worth knowing
 
+- **Engine**: pick the model. **Pixel XL (fast)** is SDXL with the LCM + pixel-art
+  LoRAs (8 steps, near-instant on a 3090). **Flux Pixel (quality)** is
+  FLUX.1-schnell with a modern pixel-art LoRA (4 steps, heavier, slower to load).
+  Only one engine is held in memory at a time — switching frees the old one's VRAM
+  and reloads, so the status dot goes amber during the swap. The active engine
+  shows in the header chip. (The Flux LoRA targets FLUX.1-dev; if it won't load on
+  schnell, the error shows in the status line — fall back to Pixel XL.)
 - **Sprite grid** (32/64/96/128/192/256): final true resolution. Prop/environment
   sprites usually live around 64–96. **Native** skips the downscale entirely and
   quantizes the full 1024px render — palette still applies — for hero assets and

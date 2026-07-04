@@ -1,8 +1,10 @@
 fastapi
 uvicorn
-diffusers>=0.27
+diffusers>=0.31
 transformers
 accelerate
 safetensors
 peft
 pillow
+sentencepiece
+protobuf
