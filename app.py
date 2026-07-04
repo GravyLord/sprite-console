@@ -16,6 +16,8 @@ Run it:   python app.py
 Open:     http://localhost:8000   (or the pod's proxy URL on RunPod)
 """
 
+import gc
+import os
 import time
 import threading
 from pathlib import Path
@@ -134,9 +136,13 @@ def detect_backend(prefer="auto"):
 # time; switching engines drops the old pipeline and frees its VRAM first.
 
 def _unload_pipe():
-    """Drop the current pipeline reference and hand its VRAM back to the driver
-    so a different engine has room to load."""
+    """Drop the current pipeline and hand its VRAM back to the driver so a
+    different engine has room to load: clear the reference, `del` the object,
+    force a GC pass, then empty the CUDA cache."""
+    pipe = state["pipe"]
     state["pipe"] = None
+    del pipe
+    gc.collect()
     try:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -150,14 +156,15 @@ def build_pixel_xl(device, dtype, on_gpu):
     the nerijs/pixel-art-xl model card."""
     from diffusers import StableDiffusionXLPipeline, LCMScheduler
 
+    token = os.environ.get("HF_TOKEN")   # keep gated downloads working
     if on_gpu:
         pipe = StableDiffusionXLPipeline.from_pretrained(
-            SDXL_ID, torch_dtype=dtype, variant="fp16", use_safetensors=True,
+            SDXL_ID, torch_dtype=dtype, variant="fp16", use_safetensors=True, token=token,
         )
     else:
         # No fp16 variant on CPU — load the full-precision weights.
         pipe = StableDiffusionXLPipeline.from_pretrained(
-            SDXL_ID, torch_dtype=dtype, use_safetensors=True,
+            SDXL_ID, torch_dtype=dtype, use_safetensors=True, token=token,
         )
 
     pipe.load_lora_weights(LCM_LORA_ID, adapter_name="lcm")
@@ -178,7 +185,8 @@ def build_flux(device, dtype, on_gpu):
     than letting the loader thread die silently."""
     from diffusers import FluxPipeline
 
-    pipe = FluxPipeline.from_pretrained(FLUX_ID, torch_dtype=dtype)
+    token = os.environ.get("HF_TOKEN")   # keep gated downloads working
+    pipe = FluxPipeline.from_pretrained(FLUX_ID, torch_dtype=dtype, token=token)
 
     try:
         pipe.load_lora_weights(FLUX_LORA_ID)
@@ -189,9 +197,13 @@ def build_flux(device, dtype, on_gpu):
             "the distilled schnell checkpoint — try Pixel XL instead."
         )
 
-    pipe.to(device)
     if on_gpu:
+        # Flux is too big to sit resident in 24GB. Stream components to the GPU
+        # on demand instead of a static .to("cuda") — avoids the CUDA OOM.
+        pipe.enable_model_cpu_offload()
         pipe.enable_vae_tiling()
+    else:
+        pipe.to(device)
     return pipe
 
 
