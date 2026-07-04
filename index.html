@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goatface Sprite Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#12151a; --panel:#1a1f26; --panel-2:#222933; --line:#2e3742;
+    --ink:#d6dde6; --dim:#7c8794;
+    --amber:#ffb454; --amber-hot:#ffd28f;
+    --ok:#69d58c; --warn:#ffb454; --err:#ff6b6b;
+    --mono:ui-monospace,'Cascadia Mono','JetBrains Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--mono);min-height:100vh}
+
+  /* ---- header ---- */
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;flex-wrap:wrap;
+         border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+  header h1{font-family:'Silkscreen',var(--mono);font-size:15px;letter-spacing:1px;color:var(--amber)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--warn);flex:none;
+       animation:pulse 1.4s ease-in-out infinite}
+  .dot.ready{background:var(--ok);animation:none}
+  .dot.error{background:var(--err);animation:none}
+  @keyframes pulse{50%{opacity:.35}}
+  #statusText{color:var(--dim);font-size:12px}
+  /* backend chip: e.g. "CUDA · RTX 3090 · 24GB" */
+  #chip{margin-left:auto;font-size:11px;color:var(--dim);border:1px solid var(--line);
+        border-radius:20px;padding:4px 11px;white-space:nowrap}
+  #chip .b{color:var(--amber)}
+
+  main{display:grid;grid-template-columns:320px 1fr;gap:0;min-height:calc(100vh - 57px)}
+  @media(max-width:760px){main{grid-template-columns:1fr}}
+
+  /* ---- control panel ---- */
+  .panel{border-right:1px solid var(--line);padding:20px;display:flex;flex-direction:column;gap:18px}
+  @media(max-width:760px){.panel{border-right:0;border-bottom:1px solid var(--line)}}
+  label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  label .soft{text-transform:none;letter-spacing:0}
+  textarea{width:100%;min-height:110px;background:var(--panel);border:1px solid var(--line);
+           border-radius:6px;color:var(--ink);font:inherit;padding:10px;resize:vertical}
+  textarea::placeholder{color:var(--dim)}
+  textarea:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{
+    outline:2px solid var(--amber);outline-offset:1px}
+
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .seg button{flex:1;background:var(--panel);border:0;color:var(--dim);padding:8px 0;font:inherit;cursor:pointer}
+  .seg button+button{border-left:1px solid var(--line)}
+  .seg button.on{background:var(--panel-2);color:var(--amber)}
+
+  .row{display:flex;align-items:center;gap:10px}
+  input[type=range]{flex:1;accent-color:var(--amber)}
+  .val{min-width:34px;text-align:right;color:var(--amber)}
+
+  input[type=number],select{width:100%;background:var(--panel);border:1px solid var(--line);
+                     border-radius:6px;color:var(--ink);font:inherit;padding:8px}
+  input[type=number]{width:120px}
+
+  #go{font-family:'Silkscreen',var(--mono);font-size:13px;letter-spacing:1px;padding:13px;
+      background:var(--amber);color:#221a09;border:0;border-radius:6px;cursor:pointer;
+      transition:background .15s}
+  #go:hover:not(:disabled){background:var(--amber-hot)}
+  #go:disabled{background:var(--panel-2);color:var(--dim);cursor:not-allowed}
+  .hint{font-size:12px;color:var(--dim)}
+
+  /* ---- results ---- */
+  .results{padding:20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+        animation:rise .28s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .card .art{
+    /* Aseprite-style checkerboard behind every sprite */
+    background:repeating-conic-gradient(#262d36 0 25%,#1c222a 0 50%) 0 0/16px 16px;
+    display:flex;justify-content:center;padding:10px}
+  .card img{width:160px;height:160px;image-rendering:pixelated}
+  .card .meta{display:flex;justify-content:space-between;align-items:center;
+              padding:7px 10px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
+  .card a{color:var(--amber);text-decoration:none}
+  .card a:hover{color:var(--amber-hot)}
+  .empty{color:var(--dim);padding:60px 20px;text-align:center;line-height:1.7}
+
+  @media (prefers-reduced-motion:reduce){
+    .dot{animation:none}
+    .card{animation:none}
+    #go{transition:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span id="dot" class="dot" aria-hidden="true"></span>
+  <h1>GOATFACE SPRITE CONSOLE</h1>
+  <span id="statusText" role="status" aria-live="polite">Connecting…</span>
+  <span id="chip" hidden></span>
+</header>
+
+<main>
+  <section class="panel" aria-label="Generation controls">
+    <div>
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" placeholder="rusted hull plate, sci-fi salvage prop, top-down view, oblique perspective"></textarea>
+    </div>
+
+    <div>
+      <label id="gridLabel">Sprite grid</label>
+      <div class="seg" id="gridSeg" role="group" aria-labelledby="gridLabel">
+        <button type="button" data-v="32">32</button>
+        <button type="button" data-v="64">64</button>
+        <button type="button" data-v="96" class="on" aria-pressed="true">96</button>
+        <button type="button" data-v="128">128</button>
+      </div>
+    </div>
+
+    <div>
+      <label for="colors">Palette colors</label>
+      <div class="row">
+        <input type="range" id="colors" min="4" max="64" value="24">
+        <span class="val" id="colorsVal" aria-hidden="true">24</span>
+      </div>
+    </div>
+
+    <div>
+      <label for="count">Variations</label>
+      <div class="row">
+        <input type="range" id="count" min="1" max="8" value="4">
+        <span class="val" id="countVal" aria-hidden="true">4</span>
+      </div>
+    </div>
+
+    <div>
+      <label for="seed">Seed <span class="soft">(blank = random)</span></label>
+      <input type="number" id="seed" placeholder="random" min="0">
+    </div>
+
+    <div>
+      <label for="backend">GPU API</label>
+      <select id="backend">
+        <option value="auto">Auto (detect best)</option>
+        <option value="cuda">CUDA / ROCm</option>
+        <option value="cpu">CPU (slow — minutes per image)</option>
+      </select>
+    </div>
+
+    <button id="go" type="button" disabled>GENERATE</button>
+    <p class="hint">Sprites save to the outputs/ folder automatically. Use a card's save link to download one for Aseprite.</p>
+  </section>
+
+  <section class="results" aria-label="Results">
+    <div class="grid" id="grid"></div>
+    <p class="empty" id="empty">No sprites yet.<br>Write a prompt and press generate.</p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let grid = 96;
+
+// segmented control for grid size
+$('gridSeg').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  grid = +btn.dataset.v;
+  [...$('gridSeg').children].forEach(b => {
+    const on = b === btn;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+});
+
+// live slider readouts
+$('colors').oninput = () => $('colorsVal').textContent = $('colors').value;
+$('count').oninput  = () => $('countVal').textContent  = $('count').value;
+
+// swap compute backend — POSTs /backend, then the poller shows the warm-up
+$('backend').onchange = async () => {
+  const device = $('backend').value;
+  $('go').disabled = true;
+  $('statusText').textContent = 'Switching backend — reloading the model…';
+  try {
+    await fetch('/backend', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({device})
+    });
+    poll();  // resume polling; status is back to loading on the server
+  } catch {
+    $('statusText').textContent = 'Could not reach the server. Is app.py still running?';
+  }
+};
+
+// reflect hardware in the header chip, e.g. "CUDA · RTX 3090 · 24GB"
+function setChip(h){
+  if (!h.backend) { $('chip').hidden = true; return; }
+  const bits = [`<span class="b">${h.backend}</span>`];
+  if (h.device_name && h.device_name !== h.backend) bits.push(h.device_name);
+  if (h.vram_gb) bits.push(`${h.vram_gb}GB`);
+  $('chip').innerHTML = bits.join(' · ');
+  $('chip').hidden = false;
+}
+
+// poll backend until the model is warm
+async function poll() {
+  try {
+    const h = await (await fetch('/health')).json();
+    setChip(h);
+    if (h.status === 'ready') {
+      $('dot').className = 'dot ready';
+      $('statusText').textContent = 'Model ready';
+      $('go').disabled = false;
+      return;
+    }
+    if (h.status === 'error') {
+      $('dot').className = 'dot error';
+      $('go').disabled = true;
+      $('statusText').textContent = 'Model failed to load — ' + (h.error || 'unknown error') +
+        '. Check the terminal running app.py, then reload this page.';
+      return;
+    }
+    $('dot').className = 'dot';
+    $('go').disabled = true;
+    $('statusText').textContent = 'Warming up the model — first load downloads ~7 GB, so give it a few minutes.';
+  } catch {
+    $('dot').className = 'dot';
+    $('statusText').textContent = 'Connecting to the server…';
+  }
+  setTimeout(poll, 3000);
+}
+poll();
+
+$('go').onclick = async () => {
+  const prompt = $('prompt').value.trim();
+  if (!prompt) { $('prompt').focus(); $('statusText').textContent = 'Add a prompt first, then generate.'; return; }
+
+  $('go').disabled = true;
+  $('go').textContent = 'GENERATING…';
+  const n = +$('count').value;
+  $('statusText').textContent = `Generating ${n} sprite${n > 1 ? 's' : ''}…`;
+
+  try {
+    const body = {
+      prompt, grid,
+      colors: +$('colors').value,
+      count:  n,
+      seed:   $('seed').value ? +$('seed').value : null
+    };
+    const r = await fetch('/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) throw new Error(data.error || `server returned ${r.status}`);
+
+    // /generate returns a bare array: [{file, seed}, ...]
+    $('empty').style.display = 'none';
+    for (const img of data) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const alt = `pixel art sprite for prompt: ${prompt}`;
+      card.innerHTML =
+        `<div class="art"><img src="${img.file}" alt="${alt.replace(/"/g,'&quot;')}"></div>` +
+        `<div class="meta"><span>seed ${img.seed}</span>` +
+        `<a href="${img.file}" download>save</a></div>`;
+      $('grid').prepend(card);
+    }
+    $('statusText').textContent = 'Model ready';
+  } catch (err) {
+    $('statusText').textContent = 'Generation failed — ' + err.message + '. Try again in a moment.';
+  }
+  $('go').disabled = false;
+  $('go').textContent = 'GENERATE';
+};
+</script>
+</body>
+</html>
