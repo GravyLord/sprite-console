@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+python-multipart
 diffusers>=0.31
 transformers
 accelerate

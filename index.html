@@ -70,6 +70,12 @@
                      border-radius:6px;color:var(--ink);font:inherit;padding:8px}
   input[type=number]{width:120px}
 
+  input[type=file]{width:100%;font:inherit;color:var(--dim)}
+  input[type=file]::file-selector-button{background:var(--panel-2);color:var(--ink);
+    border:1px solid var(--line);border-radius:6px;padding:7px 10px;font:inherit;
+    cursor:pointer;margin-right:10px}
+  input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var(--amber)}
+
   #go{font-family:'Silkscreen',var(--mono);font-size:13px;letter-spacing:1px;padding:13px;
       background:var(--amber);color:#221a09;border:0;border-radius:6px;cursor:pointer;
       transition:background .15s}
@@ -185,6 +191,12 @@
         <input type="checkbox" id="vibrance">
         Vibrance <span class="soft">— richer, more saturated colors</span>
       </label>
+    </div>
+
+    <div>
+      <label for="upload">Upload &amp; pixelate</label>
+      <input type="file" id="upload" accept="image/png,image/jpeg">
+      <p class="hint" style="margin-top:6px">Run an existing PNG or JPG through the current grid and palette. No model needed — works on any machine.</p>
     </div>
 
     <div>
@@ -379,6 +391,27 @@ $('backend').onchange = async () => {
   } catch {
     $('statusText').textContent = 'Could not reach the server. Is app.py still running?';
   }
+};
+
+// ---- upload & pixelate — no model, just the post-processing pipeline ----
+$('upload').onchange = async () => {
+  const f = $('upload').files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('grid', grid);              // "native" stays a string; sizes stringify
+  fd.append('colors', $('colors').value);
+  $('statusText').textContent = 'Pixelating upload…';
+  try {
+    const r = await fetch('/pixelate', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok || data.error) throw new Error(data.error || `server returned ${r.status}`);
+    addCard(data, 'uploaded image', false);   // seed shows as "upload"
+    $('statusText').textContent = 'Pixelated upload — saved to outputs.';
+  } catch (err) {
+    $('statusText').textContent = 'Upload failed — ' + err.message + '. Try a PNG or JPG.';
+  }
+  $('upload').value = '';   // reset so the same file can be re-uploaded
 };
 
 // ---- generate ----

@@ -17,13 +17,14 @@ Open:     http://localhost:8000   (or the pod's proxy URL on RunPod)
 """
 
 import gc
+import io
 import os
 import time
 import threading
 from pathlib import Path
 
 import torch
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -260,6 +261,18 @@ def pixelate(img: Image.Image, grid, colors: int) -> Image.Image:
     return img.quantize(colors=colors, method=Image.MEDIANCUT).convert("RGB")
 
 
+def resolve_grid(value):
+    """Map a requested grid to a valid one: "native" passes through, a known
+    size passes through, anything else falls back to the 96 default."""
+    if value == "native":
+        return "native"
+    try:
+        g = int(value)
+    except (TypeError, ValueError):
+        return 96
+    return g if g in GRID_SIZES else 96
+
+
 # ---------------------------------------------------------------- api
 
 class GenRequest(BaseModel):
@@ -329,14 +342,7 @@ def generate(req: GenRequest):
 
     # Resolve the grid: "native" skips the downscale, otherwise it must be one
     # of the known sizes (anything else falls back to the 96 default).
-    if req.grid == "native":
-        grid = "native"
-    else:
-        try:
-            gsize = int(req.grid)
-        except (TypeError, ValueError):
-            gsize = 96
-        grid = gsize if gsize in GRID_SIZES else 96
+    grid = resolve_grid(req.grid)
 
     # Vibrance nudges the model toward a richer palette: extra keywords on the
     # positive side, and "muted, desaturated" pushed onto the negative side.
@@ -386,6 +392,38 @@ def generate(req: GenRequest):
             results.append({"file": f"/outputs/{name}", "seed": seed})
 
     return results
+
+
+@app.post("/pixelate")
+async def pixelate_upload(
+    file: UploadFile = File(...),
+    grid: str = Form("96"),
+    colors: int = Form(24),
+):
+    """Run an already-made image (e.g. a Google Flow render) through the same
+    post-processing as /generate — resize to the grid with NEAREST, quantize to
+    the palette — with no model involved. Works on any machine, even with no
+    engine loaded, so it never touches the pipeline or the generation lock."""
+    try:
+        data = await file.read()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        return JSONResponse({"error": f"could not read image: {e}"}, 400)
+
+    grid = resolve_grid(grid)
+    colors = max(4, min(int(colors), 64))
+    sprite = pixelate(img, grid, colors)
+
+    # Millisecond stamp so rapid uploads don't collide; "upload" where a seed
+    # would normally go, so these read as non-generated in the gallery.
+    name = f"{int(time.time() * 1000)}_upload.png"
+    path = OUT_DIR / name
+    meta = PngInfo()
+    meta.add_text("prompt", "uploaded image")
+    meta.add_text("source", "upload")
+    sprite.save(path, pnginfo=meta)
+
+    return {"file": f"/outputs/{name}", "seed": "upload"}
 
 
 @app.get("/prompts")

@@ -113,6 +113,9 @@ read `ROCm · Radeon RX 9060 XT · …`.
   sprites usually live around 64–96. **Native** skips the downscale entirely and
   quantizes the full 1024px render — palette still applies — for hero assets and
   mockups.
+- **Upload & pixelate**: run an existing PNG/JPG (e.g. a Google Flow render) through
+  the same grid + palette post-processing with no model — works on any machine, even
+  with no engine loaded. Saves to `outputs/` like any other sprite.
 - **Vibrance**: when on, steers the model toward a richer, more saturated palette
   (adds saturation keywords to the prompt and pushes "muted, desaturated" onto the
   negative prompt).
